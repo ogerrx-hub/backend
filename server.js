@@ -1,10 +1,11 @@
 import express from "express";
 import session from "express-session";
 import cors from "cors";
-import WebSocket from "ws";
+import axios from "axios";
 
 const app = express();
 app.use(cors());
+app.use(express.json());
 app.use(session({ secret: "segredo", resave: false, saveUninitialized: true }));
 
 const PORT = process.env.PORT || 5000;
@@ -31,59 +32,37 @@ app.get("/", (req, res) => {
   res.send('<a href="/login">🔑 Login com Deriv</a>');
 });
 
-// Rota para iniciar o bot
+// Rota para iniciar o bot (via OAuth HTTP)
 app.get("/start-bot", async (req, res) => {
   const tokens = req.session.tokens;
-  if (!tokens) return res.send("⚠️ Faça login primeiro");
+  if (!tokens || !tokens.token1) return res.send("⚠️ Faça login primeiro");
 
   try {
-    const ws = new WebSocket("wss://ws.deriv.com/websockets/v3");
-
-    ws.on("open", () => {
-      console.log("Conectado à Deriv WS");
-
-      // Autorização com token1
-      ws.send(JSON.stringify({
-        authorize: tokens.token1
-      }));
-    });
-
-    ws.on("message", (msg) => {
-      const data = JSON.parse(msg);
-
-      // Após autorização, enviar ordem de compra
-      if (data.msg_type === "authorize") {
-        console.log("Autorizado. Comprando contrato...");
-        ws.send(JSON.stringify({
-          buy: 1,
-          parameters: {
-            contract_type: "CALL",
-            symbol: "R_10",
-            duration: 1,
-            duration_unit: "m",
-            basis: "stake",
-            amount: 1,
-            currency: "USD"
-          }
-        }));
+    // Exemplo: comprar contrato CALL de 1 minuto usando token1
+    const response = await axios.post(
+      "https://oauth.deriv.com/api/v1/trade",
+      {
+        contract_type: "CALL",
+        symbol: "R_10",
+        duration: 1,
+        duration_unit: "m",
+        amount: 1,
+        currency: "USD",
+        basis: "stake"
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${tokens.token1}`,
+          "Content-Type": "application/json"
+        }
       }
+    );
 
-      // Quando contrato for comprado
-      if (data.msg_type === "buy") {
-        console.log("Contrato comprado:", data);
-        res.json({ status: "Bot iniciado ✅", trade: data });
-        ws.close();
-      }
-    });
-
-    ws.on("error", (err) => {
-      console.error("Erro WebSocket:", err);
-      res.send("Erro ao conectar com a Deriv");
-    });
+    res.json({ status: "Bot iniciado ✅", trade: response.data });
 
   } catch (err) {
-    console.error(err);
-    res.send("Erro ao executar trade");
+    console.error(err.response?.data || err.message);
+    res.send("Erro ao executar trade via OAuth");
   }
 });
 
