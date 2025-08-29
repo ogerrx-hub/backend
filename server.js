@@ -1,7 +1,7 @@
 import express from "express";
 import session from "express-session";
-import axios from "axios";
 import cors from "cors";
+import WebSocket from "ws";
 
 const app = express();
 app.use(cors());
@@ -37,30 +37,54 @@ app.get("/start-bot", async (req, res) => {
   if (!tokens) return res.send("⚠️ Faça login primeiro");
 
   try {
-    // Exemplo: usando token1 para abrir contrato CALL de 1 minuto
-    const trade = await axios.post(
-      "https://api.deriv.com/v3/trade",
-      {
-        buy: 1,
-        parameters: {
-          contract_type: "CALL",
-          symbol: "R_10",
-          duration: 1,
-          duration_unit: "m",
-          basis: "stake",
-          amount: 1,
-          currency: "USD",
-        },
-      },
-      { headers: { Authorization: `Bearer ${tokens.token1}` } }
-    );
+    const ws = new WebSocket("wss://ws.deriv.com/websockets/v3");
 
-    res.json({ status: "Bot iniciado ✅", trade: trade.data });
+    ws.on("open", () => {
+      console.log("Conectado à Deriv WS");
+
+      // Autorização com token1
+      ws.send(JSON.stringify({
+        authorize: tokens.token1
+      }));
+    });
+
+    ws.on("message", (msg) => {
+      const data = JSON.parse(msg);
+
+      // Após autorização, enviar ordem de compra
+      if (data.msg_type === "authorize") {
+        console.log("Autorizado. Comprando contrato...");
+        ws.send(JSON.stringify({
+          buy: 1,
+          parameters: {
+            contract_type: "CALL",
+            symbol: "R_10",
+            duration: 1,
+            duration_unit: "m",
+            basis: "stake",
+            amount: 1,
+            currency: "USD"
+          }
+        }));
+      }
+
+      // Quando contrato for comprado
+      if (data.msg_type === "buy") {
+        console.log("Contrato comprado:", data);
+        res.json({ status: "Bot iniciado ✅", trade: data });
+        ws.close();
+      }
+    });
+
+    ws.on("error", (err) => {
+      console.error("Erro WebSocket:", err);
+      res.send("Erro ao conectar com a Deriv");
+    });
+
   } catch (err) {
-    console.error(err.response?.data || err.message);
+    console.error(err);
     res.send("Erro ao executar trade");
   }
 });
 
 app.listen(PORT, () => console.log(`🚀 Backend rodando na porta ${PORT}`));
-
